@@ -107,6 +107,11 @@ public class AzureServiceBusQueueListener<T> : IQueueListener<T>, IAsyncDisposab
                 _logger.LogWarning("Handler exceeded lock duration. Abandoning message.");
                 await args.AbandonMessageAsync(args.Message, cancellationToken: cancellationToken);
             }
+            catch(JsonException jex)
+            {
+                _logger.LogWarning(jex, "Error while deserializing message.");
+                await args.DeadLetterMessageAsync(args.Message, cancellationToken: cancellationToken);
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Unhandled error. Treating as retryable.");
