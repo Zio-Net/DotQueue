@@ -34,19 +34,18 @@ jobs:
         shell: bash
         run: |
           if [ -n "${{ github.event.inputs.version }}" ]; then
-            echo "PKGVER=${{ github.event.inputs.version }}" >> $GITHUB_ENV
+            PKGVER="${{ github.event.inputs.version }}"
           else
             FILE=$(git ls-files '*.csproj' | head -n1)
-            VER=$(grep -oPm1 '(?<=<Version>)[^<]+' "$FILE")
-            if [ -z "$VER" ]; then
-              echo "Version not found in $FILE"; exit 1
-            fi
-            echo "PKGVER=$VER" >> $GITHUB_ENV
+            PKGVER=$(grep -oPm1 '(?<=<Version>)[^<]+' "$FILE" || true)
+            if [ -z "$PKGVER" ]; then echo "Version not found in $FILE"; exit 1; fi
           fi
-          echo "Using version: ${PKGVER}"
+          echo "PKGVER=$PKGVER" >> $GITHUB_ENV
+          echo "Using version: $PKGVER"
+
 
       - name: Pack
-        run: dotnet pack -c Release -p:Version=${PKGVER} -o ./artifacts
+        run: dotnet pack -c Release -p:Version=${PKGVER} -o ./artifacts -p:IncludeSymbols=true -p:SymbolPackageFormat=snupkg
 
       - name: Push to nuget.org
         env:
@@ -56,4 +55,8 @@ jobs:
             echo "NUGET_API_KEY secret is not set."; exit 1
           fi
           dotnet nuget push "./artifacts/*.nupkg"  --skip-duplicate --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
-          dotnet nuget push "./artifacts/*.snupkg" --skip-duplicate --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
+          if ls ./artifacts/*.snupkg 1> /dev/null 2>&1; then
+            dotnet nuget push "./artifacts/*.snupkg" --skip-duplicate --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
+          else
+            echo "No symbol packages (.snupkg) found to push."
+          fi
