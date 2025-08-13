@@ -121,10 +121,28 @@ public class AzureServiceBusQueueListener<T> : IQueueListener<T>, IAsyncDisposab
 
         _processor.ProcessErrorAsync += args =>
         {
-            _logger.LogError(args.Exception, "Message handler error");
+            if (args.Exception is ServiceBusException sbex)
+            {
+                if (sbex.Reason == ServiceBusFailureReason.MessagingEntityNotFound)
+                {
+                    _logger.LogWarning("Entity not found while processing.");
+                }
+                else if (sbex.Reason == ServiceBusFailureReason.ServiceCommunicationProblem)
+                {
+                    _logger.LogWarning("Service communication problem - emulator not ready.");
+                }
+                else
+                {
+                    _logger.LogWarning("Service Bus error: {Reason}", sbex.Reason);
+                }
+            }
+            else
+            {
+                _logger.LogError(args.Exception, "Message handler error");
+            }
+
             return Task.CompletedTask;
         };
-
         await _processor.StartProcessingAsync(cancellationToken);
     }
 
