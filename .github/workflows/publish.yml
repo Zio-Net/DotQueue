@@ -75,7 +75,6 @@ jobs:
           if [ -n "${{ github.event.inputs.version }}" ]; then
             PKGVER="${{ github.event.inputs.version }}"
           else
-            # читать <Version> из основного проекта
             PKGVER=$(grep -oPm1 '(?<=<Version>)[^<]+' "$LIB_PROJ" || true)
             if [ -z "$PKGVER" ]; then
               echo "❌ <Version> not found in $LIB_PROJ"
