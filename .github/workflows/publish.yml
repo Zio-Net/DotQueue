@@ -2,8 +2,8 @@ name: publish-nuget
 
 on:
   push:
-    branches: [ main ]     
-  workflow_dispatch: 
+    branches: [ main ]
+  workflow_dispatch:
     inputs:
       version:
         description: 'Override version (optional, e.g. 0.1.2)'
@@ -20,39 +20,82 @@ jobs:
         with:
           dotnet-version: '9.0.x'
 
+      - name: Detect solution/project
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 1) try to find a solution
+          SLN=$(git ls-files '*.sln' | head -n1 || true)
+
+          # 2) find a *library* project, excluding tests and common test dirs
+          #    - excludes: *Test*.csproj, */Tests/*, */test/* (case-insensitive)
+          LIB_PROJ=$(git ls-files '*.csproj' \
+            | grep -viE 'test' \
+            | grep -viE '/tests?/|\\tests?/' \
+            | head -n1 || true)
+
+          if [ -z "$LIB_PROJ" ]; then
+            echo "❌ No library .csproj found (excluding tests)."
+            exit 1
+          fi
+
+          echo "SLN=$SLN" >> $GITHUB_ENV
+          echo "LIB_PROJ=$LIB_PROJ" >> $GITHUB_ENV
+
+          echo "Detected solution: ${SLN:-<none>}"
+          echo "Detected library project: $LIB_PROJ"
+
       - name: Restore
-        run: dotnet restore
+        shell: bash
+        run: |
+          if [ -n "${SLN}" ]; then
+            dotnet restore "${SLN}"
+          else
+            dotnet restore "${LIB_PROJ}"
+          fi
 
       - name: Build
-        run: dotnet build -c Release
+        shell: bash
+        run: |
+          if [ -n "${SLN}" ]; then
+            dotnet build "${SLN}" -c Release -p:ContinuousIntegrationBuild=true --no-restore
+          else
+            dotnet build "${LIB_PROJ}" -c Release -p:ContinuousIntegrationBuild=true --no-restore
+          fi
 
       - name: Test
-        run: dotnet test -c Release --logger trx
+        run: dotnet test -c Release --logger trx --no-build
 
       - name: Resolve version
         id: ver
         shell: bash
         run: |
+          set -euo pipefail
           if [ -n "${{ github.event.inputs.version }}" ]; then
             PKGVER="${{ github.event.inputs.version }}"
           else
-            FILE=$(git ls-files '*.csproj' | head -n1)
-            PKGVER=$(grep -oPm1 '(?<=<Version>)[^<]+' "$FILE" || true)
-            if [ -z "$PKGVER" ]; then echo "Version not found in $FILE"; exit 1; fi
+            # читать <Version> из основного проекта
+            PKGVER=$(grep -oPm1 '(?<=<Version>)[^<]+' "$LIB_PROJ" || true)
+            if [ -z "$PKGVER" ]; then
+              echo "❌ <Version> not found in $LIB_PROJ"
+              exit 1
+            fi
           fi
           echo "PKGVER=$PKGVER" >> $GITHUB_ENV
           echo "Using version: $PKGVER"
 
-
       - name: Pack
-        run: dotnet pack -c Release -p:Version=${PKGVER} -o ./artifacts -p:IncludeSymbols=true -p:SymbolPackageFormat=snupkg
+        run: dotnet pack "$LIB_PROJ" -c Release -p:Version=${PKGVER} -o ./artifacts -p:IncludeSymbols=true -p:SymbolPackageFormat=snupkg --no-build
 
       - name: Push to nuget.org
         env:
           NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        shell: bash
         run: |
-          if [ -z "$NUGET_API_KEY" ]; then
-            echo "NUGET_API_KEY secret is not set."; exit 1
+          if [ -z "${NUGET_API_KEY:-}" ]; then
+            echo "NUGET_API_KEY secret is not set."
+            exit 1
           fi
           dotnet nuget push "./artifacts/*.nupkg"  --skip-duplicate --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
           if ls ./artifacts/*.snupkg 1> /dev/null 2>&1; then
