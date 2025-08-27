@@ -31,4 +31,30 @@ public static class ServiceCollectionExtensions
 
         return services;
     }
+
+    public static IServiceCollection AddSessionQueue<T, THandler>(
+        this IServiceCollection services,
+        string queueName,
+        Action<QueueSettings>? configure = null)
+        where THandler : class, IQueueHandler<T>
+    {
+        services.AddScoped<IQueueHandler<T>, THandler>();
+
+        var settings = new QueueSettings();
+        configure?.Invoke(settings);
+        services.AddSingleton(settings);
+        services.AddSingleton<IRetryPolicyProvider, RetryPolicyProvider>();
+
+        services.AddSingleton<IQueueListener<T>>(sp =>
+            new AzureServiceBusSessionQueueListener<T>(
+                sp.GetRequiredService<ServiceBusClient>(),
+                queueName,
+                settings,
+                sp.GetRequiredService<IRetryPolicyProvider>(),
+                sp.GetRequiredService<ILogger<AzureServiceBusSessionQueueListener<T>>>()));
+
+        services.AddHostedService<QueueProcessor<T>>();
+
+        return services;
+    }
 }
