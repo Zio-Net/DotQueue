@@ -30,7 +30,7 @@ public class AzureServiceBusQueueListener<T> : IQueueListener<T>, IAsyncDisposab
         });
     }
 
-    public async Task StartAsync(Func<T, Func<Task>, CancellationToken, Task> handler, CancellationToken cancellationToken)
+    public async Task StartAsync(Func<T, IReadOnlyDictionary<string, string>?, Func<Task>, CancellationToken, Task> handler, CancellationToken cancellationToken)
     {
         var retryPolicy = _retryPolicyProvider.Create(_settings, _logger);
 
@@ -80,9 +80,13 @@ public class AzureServiceBusQueueListener<T> : IQueueListener<T>, IAsyncDisposab
                     return;
                 }
 
+                // Extract application properties as metadata
+                var metadata = args.Message.ApplicationProperties
+                    .ToDictionary(kvp => kvp.Key, kvp => kvp.Value?.ToString() ?? string.Empty);
+
                 await retryPolicy.ExecuteAsync(async () =>
                 {
-                    await handler(msg, renewLock, linkedCts.Token);
+                    await handler(msg, metadata, renewLock, linkedCts.Token);
 
                     if (_settings.ProcessingDelayMs > 0)
                     {
