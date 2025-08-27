@@ -71,8 +71,6 @@ public class AzureServiceBusSessionQueueListener<T> : IQueueListener<T>, IAsyncD
                     PropertyNameCaseInsensitive = true,
                 };
                 var msg = JsonSerializer.Deserialize<T>(json, jsonOptions);
-
-
                 if (msg == null)
                 {
                     _logger.LogWarning("Failed to deserialize message.");
