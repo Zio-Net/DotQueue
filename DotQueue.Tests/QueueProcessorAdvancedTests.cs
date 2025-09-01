@@ -106,7 +106,7 @@ public class QueueProcessorAdvancedTests
         int renewCount = 0;
         Task Renew() { renewCount++; return Task.CompletedTask; }
 
-        mock.Setup(h => h.HandleAsync("hello", new Dictionary<string, string>(), It.IsAny<Func<Task>>(), It.IsAny<CancellationToken>()))
+        mock.Setup(h => h.HandleAsync("hello", It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<Func<Task>>(), It.IsAny<CancellationToken>()))
             .Returns<string, IReadOnlyDictionary<string, string>?, Func<Task>, CancellationToken>(async (msg, meta, renew, ct) =>
             {
                 await renew();
@@ -116,7 +116,7 @@ public class QueueProcessorAdvancedTests
         await listener.CapturedHandler!("hello", new Dictionary<string, string>(), Renew, CancellationToken.None);
         await hosted.StopAsync(CancellationToken.None);
 
-        mock.Verify(h => h.HandleAsync("hello", new Dictionary<string, string>(), It.IsAny<Func<Task>>(), It.IsAny<CancellationToken>()), Times.Once);
+        mock.Verify(h => h.HandleAsync("hello", It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<Func<Task>>(), It.IsAny<CancellationToken>()), Times.Once);
         renewCount.Should().Be(2);
     }
 }
