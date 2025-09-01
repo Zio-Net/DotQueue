@@ -9,7 +9,7 @@ public class ServiceCollectionExtensionsTests
 {
     private class DummyHandler : IQueueHandler<string>
     {
-        public Task HandleAsync(string message, Func<Task> renewLock, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task HandleAsync(string message, IReadOnlyDictionary<string, string>? metadata, Func<Task> renewLock, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
     [Fact]

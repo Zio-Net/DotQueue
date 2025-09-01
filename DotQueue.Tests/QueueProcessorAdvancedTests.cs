@@ -10,8 +10,8 @@ public class QueueProcessorAdvancedTests
 {
     private class TestListener<T> : IQueueListener<T>
     {
-        public Func<T, Func<Task>, CancellationToken, Task>? CapturedHandler { get; private set; }
-        public Task StartAsync(Func<T, Func<Task>, CancellationToken, Task> handler, CancellationToken cancellationToken)
+        public Func<T, IReadOnlyDictionary<string, string>?, Func<Task>, CancellationToken, Task>? CapturedHandler { get; private set; }
+        public Task StartAsync(Func<T, IReadOnlyDictionary<string, string>?, Func<Task>, CancellationToken, Task> handler, CancellationToken cancellationToken)
         {
             CapturedHandler = handler;
             return Task.CompletedTask;
@@ -40,7 +40,7 @@ public class QueueProcessorAdvancedTests
             _tracker = tracker;
         }
 
-        public Task HandleAsync(string message, Func<Task> renewLock, CancellationToken cancellationToken)
+        public Task HandleAsync(string message, IReadOnlyDictionary<string, string>? metadata, Func<Task> renewLock, CancellationToken cancellationToken)
         {
             _tracker.Items.Add(_resource);
             return Task.CompletedTask;
@@ -64,8 +64,8 @@ public class QueueProcessorAdvancedTests
 
         await hosted.StartAsync(CancellationToken.None);
 
-        await listener.CapturedHandler!("msg1", () => Task.CompletedTask, CancellationToken.None);
-        await listener.CapturedHandler!("msg2", () => Task.CompletedTask, CancellationToken.None);
+        await listener.CapturedHandler!("msg1", new Dictionary<string, string>(), () => Task.CompletedTask, CancellationToken.None);
+        await listener.CapturedHandler!("msg2", new Dictionary<string, string>(), () => Task.CompletedTask, CancellationToken.None);
 
         await hosted.StopAsync(CancellationToken.None);
 
@@ -78,7 +78,7 @@ public class QueueProcessorAdvancedTests
     private sealed class RenewLockHandler : IQueueHandler<string>
     {
         public int Calls { get; private set; }
-        public Task HandleAsync(string message, Func<Task> renewLock, CancellationToken cancellationToken)
+        public Task HandleAsync(string message, IReadOnlyDictionary<string, string>? metadata, Func<Task> renewLock, CancellationToken cancellationToken)
         {
             renewLock().Wait();
             renewLock().Wait();
@@ -106,17 +106,17 @@ public class QueueProcessorAdvancedTests
         int renewCount = 0;
         Task Renew() { renewCount++; return Task.CompletedTask; }
 
-        mock.Setup(h => h.HandleAsync("hello", It.IsAny<Func<Task>>(), It.IsAny<CancellationToken>()))
-            .Returns<string, Func<Task>, CancellationToken>(async (msg, renew, ct) =>
+        mock.Setup(h => h.HandleAsync("hello", new Dictionary<string, string>(), It.IsAny<Func<Task>>(), It.IsAny<CancellationToken>()))
+            .Returns<string, IReadOnlyDictionary<string, string>?, Func<Task>, CancellationToken>(async (msg, meta, renew, ct) =>
             {
                 await renew();
                 await renew();
             });
 
-        await listener.CapturedHandler!("hello", Renew, CancellationToken.None);
+        await listener.CapturedHandler!("hello", new Dictionary<string, string>(), Renew, CancellationToken.None);
         await hosted.StopAsync(CancellationToken.None);
 
-        mock.Verify(h => h.HandleAsync("hello", It.IsAny<Func<Task>>(), It.IsAny<CancellationToken>()), Times.Once);
+        mock.Verify(h => h.HandleAsync("hello", new Dictionary<string, string>(), It.IsAny<Func<Task>>(), It.IsAny<CancellationToken>()), Times.Once);
         renewCount.Should().Be(2);
     }
 }
