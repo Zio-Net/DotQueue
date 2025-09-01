@@ -36,7 +36,7 @@ jobs:
             | head -n1 || true)
 
           if [ -z "$LIB_PROJ" ]; then
-            echo "❌ No library .csproj found (excluding tests)."
+            echo "No library .csproj found (excluding tests)."
             exit 1
           fi
 
@@ -77,7 +77,7 @@ jobs:
           else
             PKGVER=$(grep -oPm1 '(?<=<Version>)[^<]+' "$LIB_PROJ" || true)
             if [ -z "$PKGVER" ]; then
-              echo "❌ <Version> not found in $LIB_PROJ"
+              echo "<Version> not found in $LIB_PROJ"
               exit 1
             fi
           fi
