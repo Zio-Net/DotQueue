@@ -59,7 +59,7 @@ public class QueueProcessorAdvancedTests
         services.AddScoped<IQueueHandler<string>, TrackingHandler>();
         services.AddHostedService<QueueProcessor<string>>();
 
-        using var sp = services.BuildServiceProvider();
+        await using var sp = services.BuildServiceProvider();
         var hosted = sp.GetRequiredService<IHostedService>();
 
         await hosted.StartAsync(CancellationToken.None);
