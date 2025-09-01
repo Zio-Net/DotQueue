@@ -58,4 +58,19 @@ public class RetryPolicyProviderTests
         ex.Message.Should().Contain("do not retry");
         attempts.Should().Be(1, "non-retryable should not be retried");
     }
+    [Fact]
+    public async Task ExecutesWithoutRetryOnSuccess()
+    {
+        var settings = new QueueSettings { MaxRetryAttempts = 3, RetryDelaySeconds = 0 };
+        var logger = Mock.Of<ILogger>();
+        var provider = new RetryPolicyProvider();
+        var policy = provider.Create(settings, logger);
+        int attempts = 0;
+        await policy.ExecuteAsync(() =>
+        {
+            attempts++;
+            return Task.CompletedTask;
+        });
+        attempts.Should().Be(1, "successful execution should not retry");
+    }
 }
