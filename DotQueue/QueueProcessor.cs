@@ -15,10 +15,10 @@ public class QueueProcessor<T> : BackgroundService
     }
 
     protected override Task ExecuteAsync(CancellationToken stoppingToken) =>
-        _listener.StartAsync(async (msg, renewLock, token) =>
-        {
-            using var scope = _scopeFactory.CreateScope();
-            var handler = scope.ServiceProvider.GetRequiredService<IQueueHandler<T>>();
-            await handler.HandleAsync(msg, renewLock, token);
-        }, stoppingToken);
+    _listener.StartAsync(async (msg, metadata, renewLock, token) =>
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var handler = scope.ServiceProvider.GetRequiredService<IQueueHandler<T>>();
+        await handler.HandleAsync(msg, metadata, renewLock, token);
+    }, stoppingToken);
 }

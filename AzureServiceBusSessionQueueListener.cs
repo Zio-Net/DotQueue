@@ -4,27 +4,27 @@ using System.Text.Json;
 
 namespace DotQueue;
 
-public class AzureServiceBusQueueListener<T> : IQueueListener<T>, IAsyncDisposable
+public class AzureServiceBusSessionQueueListener<T> : IQueueListener<T>, IAsyncDisposable
 {
-    private readonly ServiceBusProcessor _processor;
+    private readonly ServiceBusSessionProcessor _processor;
     private readonly IRetryPolicyProvider _retryPolicyProvider;
     private readonly QueueSettings _settings;
-    private readonly ILogger<AzureServiceBusQueueListener<T>> _logger;
+    private readonly ILogger<AzureServiceBusSessionQueueListener<T>> _logger;
 
-    public AzureServiceBusQueueListener(
+    public AzureServiceBusSessionQueueListener(
         ServiceBusClient client,
         string queueName,
         QueueSettings settings,
         IRetryPolicyProvider retryPolicyProvider,
-        ILogger<AzureServiceBusQueueListener<T>> logger)
+        ILogger<AzureServiceBusSessionQueueListener<T>> logger)
     {
         _settings = settings;
         _retryPolicyProvider = retryPolicyProvider;
         _logger = logger;
 
-        _processor = client.CreateProcessor(queueName, new ServiceBusProcessorOptions
+        _processor = client.CreateSessionProcessor(queueName, new ServiceBusSessionProcessorOptions
         {
-            MaxConcurrentCalls = settings.MaxConcurrentCalls,
+            MaxConcurrentSessions = settings.MaxConcurrentCalls,
             PrefetchCount = settings.PrefetchCount,
             AutoCompleteMessages = false
         });
@@ -41,7 +41,7 @@ public class AzureServiceBusQueueListener<T> : IQueueListener<T>, IAsyncDisposab
             void ArmCancelAfterFromLockedUntil()
             {
                 var now = DateTimeOffset.UtcNow;
-                var timeout = args.Message.LockedUntil - now - TimeSpan.FromSeconds(2);
+                var timeout = args.SessionLockedUntil - now - TimeSpan.FromSeconds(2);
                 if (timeout <= TimeSpan.Zero)
                 {
                     linkedCts.Cancel();
@@ -56,10 +56,9 @@ public class AzureServiceBusQueueListener<T> : IQueueListener<T>, IAsyncDisposab
 
             var renewLock = async () =>
             {
-                await args.RenewMessageLockAsync(args.Message, linkedCts.Token);
-                _logger.LogDebug("Lock renewed for message {MessageId}", args.Message.MessageId);
-                _logger.LogDebug("Lock till: {Time}", args.Message.LockedUntil);
-
+                await args.RenewSessionLockAsync(linkedCts.Token);
+                _logger.LogDebug("Lock renewed for session {SessionId}", args.SessionId);
+                _logger.LogDebug("Session lock till: {Time}", args.SessionLockedUntil);
                 ArmCancelAfterFromLockedUntil();
             };
 
@@ -72,7 +71,6 @@ public class AzureServiceBusQueueListener<T> : IQueueListener<T>, IAsyncDisposab
                     PropertyNameCaseInsensitive = true,
                 };
                 var msg = JsonSerializer.Deserialize<T>(json, jsonOptions);
-
                 if (msg == null)
                 {
                     _logger.LogWarning("Failed to deserialize message.");
@@ -80,7 +78,6 @@ public class AzureServiceBusQueueListener<T> : IQueueListener<T>, IAsyncDisposab
                     return;
                 }
 
-                // Extract application properties as metadata
                 var metadata = args.Message.ApplicationProperties
                     .ToDictionary(kvp => kvp.Key, kvp => kvp.Value?.ToString() ?? string.Empty);
 
@@ -111,7 +108,7 @@ public class AzureServiceBusQueueListener<T> : IQueueListener<T>, IAsyncDisposab
                 _logger.LogWarning("Handler exceeded lock duration. Abandoning message.");
                 await args.AbandonMessageAsync(args.Message, cancellationToken: cancellationToken);
             }
-            catch(JsonException jex)
+            catch (JsonException jex)
             {
                 _logger.LogWarning(jex, "Error while deserializing message.");
                 await args.DeadLetterMessageAsync(args.Message, cancellationToken: cancellationToken);
@@ -147,6 +144,7 @@ public class AzureServiceBusQueueListener<T> : IQueueListener<T>, IAsyncDisposab
 
             return Task.CompletedTask;
         };
+
         await _processor.StartProcessingAsync(cancellationToken);
     }
 
@@ -156,4 +154,3 @@ public class AzureServiceBusQueueListener<T> : IQueueListener<T>, IAsyncDisposab
         GC.SuppressFinalize(this);
     }
 }
-

@@ -2,5 +2,5 @@
 
 public interface IQueueHandler<T>
 {
-    Task HandleAsync(T message, Func<Task> renewLock, CancellationToken cancellationToken);
+    Task HandleAsync(T message, IReadOnlyDictionary<string, string>? metadataCallback, Func<Task> renewLock, CancellationToken cancellationToken);
 }
