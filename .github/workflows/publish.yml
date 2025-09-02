@@ -13,6 +13,11 @@ on:
 jobs:
   pack-and-push:
     runs-on: ubuntu-latest
+
+    env:
+      LIB_PROJ: DotQueue/DotQueue.csproj
+      TEST_PROJ: DotQueue.Tests/DotQueue.Tests.csproj
+
     steps:
       - uses: actions/checkout@v4
 
@@ -20,52 +25,29 @@ jobs:
         with:
           dotnet-version: '9.0.x'
 
-      - name: Detect solution/project
-        id: detect
+      - name: Verify projects exist
         shell: bash
         run: |
           set -euo pipefail
-          # 1) try to find a solution
-          SLN=$(git ls-files '*.sln' | head -n1 || true)
-
-          # 2) find a *library* project, excluding tests and common test dirs
-          #    - excludes: *Test*.csproj, */Tests/*, */test/* (case-insensitive)
-          LIB_PROJ=$(git ls-files '*.csproj' \
-            | grep -viE 'test' \
-            | grep -viE '/tests?/|\\tests?/' \
-            | head -n1 || true)
-
-          if [ -z "$LIB_PROJ" ]; then
-            echo "No library .csproj found (excluding tests)."
-            exit 1
-          fi
-
-          echo "SLN=$SLN" >> $GITHUB_ENV
-          echo "LIB_PROJ=$LIB_PROJ" >> $GITHUB_ENV
-
-          echo "Detected solution: ${SLN:-<none>}"
-          echo "Detected library project: $LIB_PROJ"
+          [[ -f "$LIB_PROJ" ]] || { echo "Library not found: $LIB_PROJ"; exit 1; }
+          [[ -f "$TEST_PROJ" ]] || { echo "Test project not found: $TEST_PROJ"; exit 1; }
+          echo "Library: $LIB_PROJ"
+          echo "Tests:   $TEST_PROJ"
 
       - name: Restore
         shell: bash
         run: |
-          if [ -n "${SLN}" ]; then
-            dotnet restore "${SLN}"
-          else
-            dotnet restore "${LIB_PROJ}"
-          fi
+          dotnet restore "$TEST_PROJ"
 
-      - name: Build
+      - name: Build library
         shell: bash
         run: |
-          if [ -n "${SLN}" ]; then
-            dotnet build "${SLN}" -c Release -p:ContinuousIntegrationBuild=true --no-restore
-          else
-            dotnet build "${LIB_PROJ}" -c Release -p:ContinuousIntegrationBuild=true --no-restore
-          fi
+          dotnet build "$LIB_PROJ" -c Release -p:ContinuousIntegrationBuild=true --no-restore
 
       - name: Test
-        run: dotnet test -c Release --logger trx --no-build
+        shell: bash
+        run: |
+          dotnet test "$TEST_PROJ" -c Release --logger "trx;LogFileName=test-results.trx"
 
       - name: Resolve version
         id: ver
@@ -77,7 +59,7 @@ jobs:
           else
             PKGVER=$(grep -oPm1 '(?<=<Version>)[^<]+' "$LIB_PROJ" || true)
             if [ -z "$PKGVER" ]; then
-              echo "<Version> not found in $LIB_PROJ"
+              echo "<Version> not found in $LIB_PROJ" >&2
               exit 1
             fi
           fi
@@ -85,15 +67,22 @@ jobs:
           echo "Using version: $PKGVER"
 
       - name: Pack
-        run: dotnet pack "$LIB_PROJ" -c Release -p:Version=${PKGVER} -o ./artifacts -p:IncludeSymbols=true -p:SymbolPackageFormat=snupkg --no-build
+        shell: bash
+        run: |
+          dotnet pack "$LIB_PROJ" -c Release \
+            -p:Version="${PKGVER}" \
+            -p:IncludeSymbols=true -p:SymbolPackageFormat=snupkg \
+            -o ./artifacts \
+            --no-build
 
       - name: Push to nuget.org
         env:
           NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         shell: bash
         run: |
+          set -euo pipefail
           if [ -z "${NUGET_API_KEY:-}" ]; then
-            echo "NUGET_API_KEY secret is not set."
+            echo "NUGET_API_KEY secret is not set." >&2
             exit 1
           fi
           dotnet nuget push "./artifacts/*.nupkg"  --skip-duplicate --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
