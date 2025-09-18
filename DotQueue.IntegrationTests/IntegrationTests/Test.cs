@@ -79,7 +79,7 @@ public class DotQueue_Smoke
         public async Task HandleAsync(SimpleMsg message, IReadOnlyDictionary<string, string>? _, Func<Task> complete, CancellationToken ct)
         {
             _log.LogInformation("Got: {Text}", message.Text);
-            if (complete is not null) await complete();   
+            await complete();
             _tcs.TrySetResult(message.Text);             
         }
     }
