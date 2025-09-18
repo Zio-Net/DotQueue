@@ -1,0 +1,57 @@
+version: "3.9"
+
+services:
+
+  # -------------------- Azure SQL Edge --------------------
+  sqledge:
+    container_name: sqledge
+    image: mcr.microsoft.com/azure-sql-edge:latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "YourStrongP@ssword123!"
+    ports:
+      - "1433:1433"  # Optional: expose for local dev
+    # volumes:
+    #   - sqledge-data:/var/opt/mssql
+    networks:
+      - sb-emulator
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/bin/bash", "-c", "nc -z localhost 1433"]
+      interval: 10s
+      retries: 3
+
+  # -------------------- Azure Service Bus Emulator --------------------
+  servicebus-emulator:
+    container_name: servicebus-emulator
+    image: mcr.microsoft.com/azure-messaging/servicebus-emulator:latest
+    pull_policy: always
+    volumes:
+       - ./servicebus-emulator:/ServiceBus_Emulator/ConfigFiles
+    ports:
+      - "5672:5672"       
+      - "5671:5671"
+      - "5300:5300"
+    environment:
+      SQL_SERVER: sqledge
+      MSSQL_SA_PASSWORD: "YourStrongP@ssword123!"
+      ACCEPT_EULA: "Y"
+    depends_on:
+      - sqledge
+    networks:
+      sb-emulator:
+        aliases:
+          - sbemulatorns
+    healthcheck:
+      test: ["CMD", "/bin/bash", "-c", "nc -z localhost 5672"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+
+# ------------------------ Shared Networks ---------------------------
+networks:
+  microservice-net:
+    driver: bridge
+  sb-emulator:
+    driver: bridge
