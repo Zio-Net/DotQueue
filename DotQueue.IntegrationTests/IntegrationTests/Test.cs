@@ -73,7 +73,8 @@ public class DotQueue_Smoke
 
         public SimpleHandler(TaskCompletionSource<string> tcs, ILogger<SimpleHandler> log)
         {
-            _tcs = tcs; _log = log;
+            _tcs = tcs;
+            _log = log;
         }
 
         public async Task HandleAsync(SimpleMsg message, IReadOnlyDictionary<string, string>? _, Func<Task> complete, CancellationToken ct)
