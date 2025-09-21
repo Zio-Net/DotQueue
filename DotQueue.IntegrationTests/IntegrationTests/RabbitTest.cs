@@ -16,7 +16,7 @@ namespace IntegrationTests;
 public class DotQueue_Rabbit_Smoke
 {
     private const string Amqp =
-        "amqp://guest:guest@localhost:5673/";
+        "amqp://admin:admin@localhost:5673/";
 
     [Fact(Timeout = 60000)]
     public async Task Message_is_received()
@@ -55,25 +55,22 @@ public class DotQueue_Rabbit_Smoke
         await using var conn = await factory.CreateConnectionAsync(cts.Token);
         await using var ch = await conn.CreateChannelAsync(cancellationToken: cts.Token);
 
-        await ch.QueueDeclareAsync(
-            queue: queueName,
-            durable: false,
-            exclusive: false,
-            autoDelete: false,
-            arguments: null,
-            cancellationToken: cts.Token);
+        for (var i = 0; i < 100; i++)
+        {
+            await using var probe = await conn.CreateChannelAsync(cancellationToken: cts.Token);
+            try
+            {
+                var q = await probe.QueueDeclarePassiveAsync(queueName, cts.Token);
+                if (q.ConsumerCount > 0) break;
+            }
+            catch { }
+            await Task.Delay(100, cts.Token);
+        }
 
         var payload = new SimpleMsg("hello");
         var body = JsonSerializer.SerializeToUtf8Bytes(payload);
-
-        var props = new BasicProperties { ContentType = "application/json" };
-        await ch.BasicPublishAsync(
-            exchange: "",
-            routingKey: queueName,
-            mandatory: false,
-            basicProperties: props,
-            body: body,
-            cancellationToken: cts.Token);
+        await ch.BasicPublishAsync("", queueName, false,
+            new BasicProperties { ContentType = "application/json" }, body, cts.Token);
 
         var receivedText = await gotIt.Task.WaitAsync(cts.Token);
         Assert.Equal("hello", receivedText);

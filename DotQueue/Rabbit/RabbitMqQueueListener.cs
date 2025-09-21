@@ -53,7 +53,16 @@ public sealed class RabbitMqQueueListener<T> : IQueueListener<T>, IAsyncDisposab
                 var msg = JsonSerializer.Deserialize<T>(bodyBytes, _json)
                           ?? throw new NonRetryableException("Deserialize failed");
 
-                var meta = ConvertHeaders(ea.BasicProperties?.Headers);
+                var meta = ea.BasicProperties?.Headers?
+                    .ToDictionary(
+                        kvp => kvp.Key,
+                        kvp => kvp.Value switch
+                        {
+                            null => string.Empty,
+                            byte[] b => Encoding.UTF8.GetString(b),
+                            ReadOnlyMemory<byte> rom => Encoding.UTF8.GetString(rom.Span),
+                            _ => kvp.Value.ToString() ?? string.Empty
+                        });
 
                 var policy = _retry.Create(_settings, _log);
                 await policy.ExecuteAsync(async () =>
@@ -85,25 +94,6 @@ public sealed class RabbitMqQueueListener<T> : IQueueListener<T>, IAsyncDisposab
             cancellationToken: ct
         ).ConfigureAwait(false);
     }
-
-    private static IReadOnlyDictionary<string, string>? ConvertHeaders(IDictionary<string, object?>? headers)
-    {
-        if (headers is null || headers.Count == 0) return null;
-        var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var (k, v) in headers)
-        {
-            d[k] = v switch
-            {
-                byte[] b => Encoding.UTF8.GetString(b),
-                ReadOnlyMemory<byte> rom => Encoding.UTF8.GetString(rom.ToArray()),
-                string s => s,
-                null => string.Empty,
-                _ => v?.ToString() ?? string.Empty
-            };
-        }
-        return d;
-    }
-
     public async ValueTask DisposeAsync()
     {
         try { if (_ch is not null) await _ch.DisposeAsync().ConfigureAwait(false); } catch { }

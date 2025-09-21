@@ -20,14 +20,12 @@ public static class RabbitMqServiceCollectionExtensions
         var settings = new QueueSettings();
         configure?.Invoke(settings);
         services.AddSingleton(settings);
-
         services.AddSingleton<IRetryPolicyProvider, RetryPolicyProvider>();
 
         services.AddSingleton<IConnectionFactory>(_ => new ConnectionFactory
         {
             Uri = new Uri(amqpConnectionString),
         });
-
         services.AddSingleton<IQueueListener<T>>(sp =>
             new RabbitMqQueueListener<T>(
                 sp.GetRequiredService<IConnectionFactory>(),
