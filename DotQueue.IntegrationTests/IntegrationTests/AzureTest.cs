@@ -15,7 +15,7 @@ public class DotQueue_Smoke
     [Fact(Timeout = 60000)]
     public async Task Message_is_received()
     {
-        const string queueName = "demo-messages"; 
+        const string queueName = "demo-messages";
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
         var gotIt = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -70,14 +70,15 @@ public class DotQueue_Smoke
 
         public SimpleHandler(TaskCompletionSource<string> tcs, ILogger<SimpleHandler> log)
         {
-            _tcs = tcs; _log = log;
+            _tcs = tcs;
+            _log = log;
         }
 
         public async Task HandleAsync(SimpleMsg message, IReadOnlyDictionary<string, string>? _, Func<Task> complete, CancellationToken ct)
         {
             _log.LogInformation("Got: {Text}", message.Text);
-            if (complete is not null) await complete();   
-            _tcs.TrySetResult(message.Text);             
+            await complete();
+            _tcs.TrySetResult(message.Text);
         }
     }
 }
