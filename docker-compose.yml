@@ -47,11 +47,33 @@ services:
       interval: 5s
       timeout: 5s
       retries: 15
+# ------------------------------ RabbitMQ ------------------------------
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: rabbitmq-test
+    ports:
+      - "5673:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_running"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
+  rabbit-init:
+    image: curlimages/curl:8.9.1
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    command: >
+      sh -c 'until curl -su admin:admin http://rabbitmq:15672/api/overview >/dev/null 2>&1; do sleep 1; done;
+      curl -su admin:admin -H "content-type: application/json" -X PUT "http://rabbitmq:15672/api/queues/%2f/demo-messages"
+      -d "{\"durable\":false,\"auto_delete\":false,\"arguments\":{}}";'
 
 # ------------------------ Shared Networks ---------------------------
 networks:
-  microservice-net:
-    driver: bridge
   sb-emulator:
     driver: bridge

@@ -2,7 +2,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace DotQueue;
+namespace DotQueue.Azure;
 
 public static class ServiceCollectionExtensions
 {

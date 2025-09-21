@@ -1,4 +1,5 @@
 using Azure.Messaging.ServiceBus;
+using DotQueue.Azure;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
