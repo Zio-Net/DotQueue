@@ -2,7 +2,7 @@
 using Microsoft.Extensions.Logging;
 using System.Text.Json;
 
-namespace DotQueue;
+namespace DotQueue.Azure;
 
 public class AzureServiceBusSessionQueueListener<T> : IQueueListener<T>, IAsyncDisposable
 {

@@ -1,24 +1,21 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text.Json;
-using System.Threading;
-using System.Threading.Tasks;
-using Azure.Messaging.ServiceBus;
+﻿using Azure.Messaging.ServiceBus;
 using DotQueue;
+using DotQueue.Azure;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Xunit;
+using System.Text.Json;
 
+namespace IntegrationTests;
 public class DotQueue_Smoke
 {
     private const string Conn =
         "Endpoint=sb://localhost;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;";
 
     [Fact(Timeout = 60000)]
-    public async Task Message_is_received_and_completed()
+    public async Task Message_is_received()
     {
-        const string queueName = "demo-messages"; 
+        const string queueName = "demo-messages";
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
         var gotIt = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -81,7 +78,7 @@ public class DotQueue_Smoke
         {
             _log.LogInformation("Got: {Text}", message.Text);
             await complete();
-            _tcs.TrySetResult(message.Text);             
+            _tcs.TrySetResult(message.Text);
         }
     }
 }
