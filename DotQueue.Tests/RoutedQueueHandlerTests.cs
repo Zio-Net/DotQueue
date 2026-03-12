@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using DotQueue;
@@ -57,6 +57,43 @@ public class RoutedQueueHandlerTests
         }
     }
 
+    private sealed class WrappedInvocationHandler : RoutedQueueHandler<TestMessage, Act>
+    {
+        public bool WasWrapped { get; private set; }
+        public Act? LastAction { get; private set; }
+        public int Calls { get; private set; }
+
+        public WrappedInvocationHandler(ILogger logger) : base(logger) { }
+
+        protected override Act GetAction(TestMessage message) => message.Action;
+
+        protected override void Configure(RouteBuilder r) => r
+            .On(Act.A, HandleA);
+
+        protected override async Task InvokeHandlerAsync(
+            Act action,
+            HandlerDelegate handler,
+            TestMessage message,
+            IReadOnlyDictionary<string, string>? metadata,
+            Func<Task> renewLock,
+            CancellationToken ct)
+        {
+            WasWrapped = true;
+            LastAction = action;
+            await handler(message, metadata, renewLock, ct);
+        }
+
+        private Task HandleA(
+            TestMessage m,
+            IReadOnlyDictionary<string, string>? meta,
+            Func<Task> renew,
+            CancellationToken ct)
+        {
+            Calls++;
+            return Task.CompletedTask;
+        }
+    }
+
     [Fact]
     public async Task Routes_To_Registered_Handlers_And_Passes_Metadata_And_RenewLock()
     {
@@ -92,5 +129,22 @@ public class RoutedQueueHandlerTests
 
         await act.Should().ThrowAsync<NonRetryableException>()
                  .WithMessage("*No handler registered for action*");
+    }
+
+    [Fact]
+    public async Task HandleAsync_Uses_InvokeHandlerAsync_For_Resolved_Routes()
+    {
+        var logger = Mock.Of<ILogger>();
+        var handler = new WrappedInvocationHandler(logger);
+
+        await handler.HandleAsync(
+            new TestMessage { Action = Act.A },
+            null,
+            () => Task.CompletedTask,
+            CancellationToken.None);
+
+        handler.WasWrapped.Should().BeTrue();
+        handler.LastAction.Should().Be(Act.A);
+        handler.Calls.Should().Be(1);
     }
 }
