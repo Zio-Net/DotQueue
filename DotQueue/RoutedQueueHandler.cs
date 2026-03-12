@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 
 namespace DotQueue;
 
@@ -26,6 +26,18 @@ public abstract class RoutedQueueHandler<TMessage, TAction> : IQueueHandler<TMes
 
     protected void Register(TAction action, HandlerDelegate handler) => _routes[action] = handler;
 
+    /// <summary>
+    /// Invokes the resolved handler for the given action.
+    /// Override to wrap handler execution with cross-cutting concerns.
+    /// </summary>
+    protected virtual Task InvokeHandlerAsync(
+        TAction action,
+        HandlerDelegate handler,
+        TMessage message,
+        IReadOnlyDictionary<string, string>? metadata,
+        Func<Task> renewLock,
+        CancellationToken ct) => handler(message, metadata, renewLock, ct);
+
     protected sealed class RouteBuilder
     {
         private readonly RoutedQueueHandler<TMessage, TAction> _owner;
@@ -48,7 +60,7 @@ public abstract class RoutedQueueHandler<TMessage, TAction> : IQueueHandler<TMes
 
         if (_routes.TryGetValue(action, out var handler))
         {
-            return handler(message, metadata, renewLock, ct);
+            return InvokeHandlerAsync(action, handler, message, metadata, renewLock, ct);
         }
 
         _logger.LogWarning("No handler registered for action {Action}", action);
