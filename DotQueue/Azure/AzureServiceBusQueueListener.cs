@@ -1,4 +1,4 @@
-﻿using Azure.Messaging.ServiceBus;
+using Azure.Messaging.ServiceBus;
 using Microsoft.Extensions.Logging;
 using System.Text.Json;
 
@@ -67,11 +67,7 @@ public class AzureServiceBusQueueListener<T> : IQueueListener<T>, IAsyncDisposab
             {
                 var json = args.Message.Body.ToString();
                 _logger.LogDebug("Raw message body: {Json}", json);
-                var jsonOptions = new JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true,
-                };
-                var msg = JsonSerializer.Deserialize<T>(json, jsonOptions);
+                var msg = DeserializeMessage(json);
 
                 if (msg == null)
                 {
@@ -154,6 +150,21 @@ public class AzureServiceBusQueueListener<T> : IQueueListener<T>, IAsyncDisposab
     {
         await _processor.DisposeAsync();
         GC.SuppressFinalize(this);
+    }
+
+    private static T? DeserializeMessage(string json)
+    {
+        if (typeof(T) == typeof(RawQueueMessage))
+        {
+            return (T)(object)new RawQueueMessage(json);
+        }
+
+        var jsonOptions = new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+        };
+
+        return JsonSerializer.Deserialize<T>(json, jsonOptions);
     }
 }
 
