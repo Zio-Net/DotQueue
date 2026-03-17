@@ -1,4 +1,4 @@
-do# DotQueue
+# DotQueue
 Provider‑agnostic .NET queue consumer + message pump. Includes Azure ServiceBus Queues adapter
 
 ## Typed routed handlers (agent-style)
@@ -10,13 +10,21 @@ the queue metadata contains a discriminator key `messageType`.
 using DotQueue;
 using Microsoft.Extensions.Logging;
 
-internal sealed class DecisionAgentQueueHandler(ILogger<DecisionAgentQueueHandler> logger)
-    : TypedRoutedQueueHandler(logger)
+internal sealed class DecisionAgentQueueHandler : TypedRoutedQueueHandler
 {
+    public DecisionAgentQueueHandler(ILogger<DecisionAgentQueueHandler> logger) : base(logger)
+    {
+        // Important: initialize routes after derived type construction is complete.
+        InitializeRoutes();
+    }
+
+    private const string InterventionContextV1 = "interventions.context.v1";
+    private const string DecisionInputV1 = "interventions.decision-input.v1";
+
     protected override RouteBuilder ConfigureRoutes(RouteBuilder routeBuilder)
         => routeBuilder
-            .AddHandler<InterventionContextData>(CollectContextAsync)
-            .AddHandler<DecisionAgentInput, InterventionDecisionResult>(MakeDecisionAsync);
+            .AddHandler<InterventionContextData>(InterventionContextV1, CollectContextAsync)
+            .AddHandler<DecisionAgentInput>(DecisionInputV1, MakeDecisionAsync);
 
     private static ValueTask CollectContextAsync(
         InterventionContextData message,
@@ -28,14 +36,14 @@ internal sealed class DecisionAgentQueueHandler(ILogger<DecisionAgentQueueHandle
         return ValueTask.CompletedTask;
     }
 
-    private static ValueTask<InterventionDecisionResult> MakeDecisionAsync(
+    private static ValueTask MakeDecisionAsync(
         DecisionAgentInput message,
         IReadOnlyDictionary<string, string>? metadata,
         Func<Task> renewLock,
         CancellationToken ct)
     {
-        var result = new InterventionDecisionResult();
-        return ValueTask.FromResult(result);
+        // Trigger next step through your own publisher/event bus if needed.
+        return ValueTask.CompletedTask;
     }
 }
 ```
@@ -64,15 +72,15 @@ services.AddTypedRoutedRabbitMQQueue<DecisionAgentQueueHandler>(
 
 ### Producer metadata contract
 
-Set metadata/header key `messageType` to the target CLR type name (or full name),
-and serialize the body as JSON for that type.
+Set metadata/header key `messageType` to a stable contract key
+(for example `interventions.context.v1`), then serialize the body as JSON.
 
 Azure Service Bus:
 
 ```csharp
 var body = JsonSerializer.Serialize(new InterventionContextData { /* ... */ });
 var message = new ServiceBusMessage(body);
-message.ApplicationProperties["messageType"] = nameof(InterventionContextData);
+message.ApplicationProperties["messageType"] = "interventions.context.v1";
 await sender.SendMessageAsync(message);
 ```
 
@@ -88,7 +96,7 @@ await channel.BasicPublishAsync(
     {
         Headers = new Dictionary<string, object?>
         {
-            ["messageType"] = Encoding.UTF8.GetBytes(nameof(InterventionContextData))
+            ["messageType"] = Encoding.UTF8.GetBytes("interventions.context.v1")
         }
     },
     body: body);

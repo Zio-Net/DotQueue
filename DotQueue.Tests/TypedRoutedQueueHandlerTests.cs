@@ -8,9 +8,11 @@ namespace DotQueue.Tests;
 
 public class TypedRoutedQueueHandlerTests
 {
+    private const string ContextContractKey = "tests.context.v1";
+    private const string DecisionContractKey = "tests.decision-input.v1";
+
     private sealed record ContextMessage(string Source);
     private sealed record DecisionInput(int Count);
-    private sealed record DecisionResult(string Value);
 
     private sealed class TestTypedHandler : TypedRoutedQueueHandler
     {
@@ -18,14 +20,14 @@ public class TypedRoutedQueueHandlerTests
         public int DecisionCalls { get; private set; }
         public int RenewCalls { get; private set; }
         public IReadOnlyDictionary<string, string>? LastMetadata { get; private set; }
-        public DecisionResult? LastResult { get; private set; }
+        public int LastDecisionCount { get; private set; }
 
-        public TestTypedHandler(ILogger logger) : base(logger) { }
+        public TestTypedHandler(ILogger logger) : base(logger) => InitializeRoutes();
 
         protected override RouteBuilder ConfigureRoutes(RouteBuilder routeBuilder)
             => routeBuilder
-                .AddHandler<ContextMessage>(HandleContextAsync)
-                .AddHandler<DecisionInput, DecisionResult>(HandleDecisionAsync);
+                .AddHandler<ContextMessage>(ContextContractKey, HandleContextAsync)
+                .AddHandler<DecisionInput>(DecisionContractKey, HandleDecisionAsync);
 
         private async ValueTask HandleContextAsync(
             ContextMessage message,
@@ -39,7 +41,7 @@ public class TypedRoutedQueueHandlerTests
             ContextCalls++;
         }
 
-        private ValueTask<DecisionResult> HandleDecisionAsync(
+        private ValueTask HandleDecisionAsync(
             DecisionInput message,
             IReadOnlyDictionary<string, string>? metadata,
             Func<Task> renewLock,
@@ -47,8 +49,8 @@ public class TypedRoutedQueueHandlerTests
         {
             LastMetadata = metadata;
             DecisionCalls++;
-            LastResult = new DecisionResult($"decision-{message.Count}");
-            return ValueTask.FromResult(LastResult);
+            LastDecisionCount = message.Count;
+            return ValueTask.CompletedTask;
         }
     }
 
@@ -58,10 +60,10 @@ public class TypedRoutedQueueHandlerTests
         public Type? LastType { get; private set; }
         public int Calls { get; private set; }
 
-        public WrappedInvocationTypedHandler(ILogger logger) : base(logger) { }
+        public WrappedInvocationTypedHandler(ILogger logger) : base(logger) => InitializeRoutes();
 
         protected override RouteBuilder ConfigureRoutes(RouteBuilder routeBuilder)
-            => routeBuilder.AddHandler<ContextMessage>(HandleContextAsync);
+            => routeBuilder.AddHandler<ContextMessage>(ContextContractKey, HandleContextAsync);
 
         protected override async ValueTask InvokeHandlerAsync(
             Type messageType,
@@ -95,7 +97,7 @@ public class TypedRoutedQueueHandlerTests
 
         var metadata = new Dictionary<string, string>
         {
-            [TypedRoutedQueueHandler.MessageTypeMetadataKey] = nameof(ContextMessage),
+            [TypedRoutedQueueHandler.MessageTypeMetadataKey] = ContextContractKey,
             ["traceId"] = "t1",
         };
 
@@ -121,14 +123,14 @@ public class TypedRoutedQueueHandlerTests
     }
 
     [Fact]
-    public async Task AddHandler_With_Response_Executes_And_Result_Is_Created()
+    public async Task Routes_Using_Stable_Contract_Key_Not_Type_Name()
     {
         var logger = Mock.Of<ILogger>();
         var handler = new TestTypedHandler(logger);
 
         var metadata = new Dictionary<string, string>
         {
-            [TypedRoutedQueueHandler.MessageTypeMetadataKey] = "decisioninput",
+            [TypedRoutedQueueHandler.MessageTypeMetadataKey] = DecisionContractKey,
         };
 
         await handler.HandleAsync(
@@ -138,28 +140,7 @@ public class TypedRoutedQueueHandlerTests
             CancellationToken.None);
 
         handler.DecisionCalls.Should().Be(1);
-        handler.LastResult.Should().NotBeNull();
-        handler.LastResult!.Value.Should().Be("decision-3");
-    }
-
-    [Fact]
-    public async Task FullName_MessageType_Is_Also_Supported()
-    {
-        var logger = Mock.Of<ILogger>();
-        var handler = new TestTypedHandler(logger);
-
-        var metadata = new Dictionary<string, string>
-        {
-            [TypedRoutedQueueHandler.MessageTypeMetadataKey] = typeof(ContextMessage).FullName!,
-        };
-
-        await handler.HandleAsync(
-            new RawQueueMessage("""{"source":"full-name"}"""),
-            metadata,
-            () => Task.CompletedTask,
-            CancellationToken.None);
-
-        handler.ContextCalls.Should().Be(1);
+        handler.LastDecisionCount.Should().Be(3);
     }
 
     [Fact]
@@ -207,7 +188,7 @@ public class TypedRoutedQueueHandlerTests
             new RawQueueMessage("""{"source":}"""),
             new Dictionary<string, string>
             {
-                [TypedRoutedQueueHandler.MessageTypeMetadataKey] = nameof(ContextMessage),
+                [TypedRoutedQueueHandler.MessageTypeMetadataKey] = ContextContractKey,
             },
             () => Task.CompletedTask,
             CancellationToken.None);
@@ -226,7 +207,7 @@ public class TypedRoutedQueueHandlerTests
             new RawQueueMessage("""{"source":"wrapped"}"""),
             new Dictionary<string, string>
             {
-                [TypedRoutedQueueHandler.MessageTypeMetadataKey] = nameof(ContextMessage),
+                [TypedRoutedQueueHandler.MessageTypeMetadataKey] = ContextContractKey,
             },
             () => Task.CompletedTask,
             CancellationToken.None);

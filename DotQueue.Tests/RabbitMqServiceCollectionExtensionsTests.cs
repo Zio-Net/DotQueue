@@ -17,11 +17,12 @@ public class RabbitMqServiceCollectionExtensionsTests
             CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
-    private sealed class DummyTypedHandler(ILogger<DummyTypedHandler> logger)
-        : TypedRoutedQueueHandler(logger)
+    private sealed class DummyTypedHandler : TypedRoutedQueueHandler
     {
+        public DummyTypedHandler(ILogger<DummyTypedHandler> logger) : base(logger) => InitializeRoutes();
+
         protected override RouteBuilder ConfigureRoutes(RouteBuilder routeBuilder)
-            => routeBuilder.AddHandler<DummyMessage>(HandleAsync);
+            => routeBuilder.AddHandler<DummyMessage>("tests.rabbit-dummy.v1", HandleAsync);
 
         private static ValueTask HandleAsync(
             DummyMessage message,

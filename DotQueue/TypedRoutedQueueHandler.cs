@@ -14,9 +14,21 @@ public abstract class TypedRoutedQueueHandler : IQueueHandler<RawQueueMessage>
         PropertyNameCaseInsensitive = true,
     };
 
-    protected TypedRoutedQueueHandler(ILogger logger)
+    private int _isInitialized;
+
+    protected TypedRoutedQueueHandler(ILogger logger) => _logger = logger;
+
+    /// <summary>
+    /// Initializes routes once. Call this from the derived constructor after the derived
+    /// type has finished its own initialization.
+    /// </summary>
+    protected void InitializeRoutes()
     {
-        _logger = logger;
+        if (Interlocked.Exchange(ref _isInitialized, 1) == 1)
+        {
+            return;
+        }
+
         ConfigureRoutes(new RouteBuilder(this));
     }
 
@@ -36,14 +48,15 @@ public abstract class TypedRoutedQueueHandler : IQueueHandler<RawQueueMessage>
         Func<Task> renewLock,
         CancellationToken ct) => handler(message, metadata, renewLock, ct);
 
-    private void Register(Type messageType, HandlerDelegate handler)
+    private void Register(string contractKey, Type messageType, HandlerDelegate handler)
     {
-        var route = new TypeRoute(messageType, handler);
+        if (string.IsNullOrWhiteSpace(contractKey))
+        {
+            throw new ArgumentException("Contract key cannot be null or whitespace.", nameof(contractKey));
+        }
 
-        // Register a few aliases to make producer-side naming flexible.
-        _routesByMessageType[messageType.Name] = route;
-        _routesByMessageType[messageType.FullName ?? messageType.Name] = route;
-        _routesByMessageType[messageType.AssemblyQualifiedName ?? messageType.Name] = route;
+        var route = new TypeRoute(messageType, handler);
+        _routesByMessageType[contractKey] = route;
     }
 
     protected sealed class RouteBuilder
@@ -53,23 +66,13 @@ public abstract class TypedRoutedQueueHandler : IQueueHandler<RawQueueMessage>
         internal RouteBuilder(TypedRoutedQueueHandler owner) => _owner = owner;
 
         public RouteBuilder AddHandler<TIn>(
+            string contractKey,
             Func<TIn, IReadOnlyDictionary<string, string>?, Func<Task>, CancellationToken, ValueTask> handler)
         {
             _owner.Register(
+                contractKey,
                 typeof(TIn),
                 (message, metadata, renewLock, ct) => handler((TIn)message, metadata, renewLock, ct));
-            return this;
-        }
-
-        public RouteBuilder AddHandler<TIn, TOut>(
-            Func<TIn, IReadOnlyDictionary<string, string>?, Func<Task>, CancellationToken, ValueTask<TOut>> handler)
-        {
-            _owner.Register(
-                typeof(TIn),
-                async (message, metadata, renewLock, ct) =>
-                {
-                    _ = await handler((TIn)message, metadata, renewLock, ct);
-                });
             return this;
         }
     }
@@ -80,6 +83,12 @@ public abstract class TypedRoutedQueueHandler : IQueueHandler<RawQueueMessage>
         Func<Task> renewLock,
         CancellationToken ct)
     {
+        if (Volatile.Read(ref _isInitialized) == 0)
+        {
+            throw new InvalidOperationException(
+                $"{GetType().Name} routes are not initialized. Call {nameof(InitializeRoutes)}() from the derived constructor.");
+        }
+
         if (metadata is null || !TryGetMessageType(metadata, out var messageType))
         {
             _logger.LogWarning("Missing required metadata key {MetadataKey}", MessageTypeMetadataKey);

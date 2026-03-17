@@ -11,6 +11,7 @@ public class DotQueue_Smoke
 {
     private const string Conn =
         "Endpoint=sb://localhost;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;";
+    private const string TypedMessageContract = "integration-tests.typed-msg.v1";
 
     [Fact(Timeout = 60000)]
     public async Task Message_is_received()
@@ -101,7 +102,7 @@ public class DotQueue_Smoke
         {
             ContentType = "application/json",
         };
-        message.ApplicationProperties[TypedRoutedQueueHandler.MessageTypeMetadataKey] = nameof(TypedMsg);
+        message.ApplicationProperties[TypedRoutedQueueHandler.MessageTypeMetadataKey] = TypedMessageContract;
 
         await sender.SendMessageAsync(message, cts.Token);
 
@@ -135,14 +136,18 @@ public class DotQueue_Smoke
 
     private sealed record TypedMsg(string Text);
 
-    private sealed class TypedHandler(
-        TaskCompletionSource<string> tcs,
-        ILogger<TypedHandler> logger) : TypedRoutedQueueHandler(logger)
+    private sealed class TypedHandler : TypedRoutedQueueHandler
     {
-        private readonly TaskCompletionSource<string> _tcs = tcs;
+        private readonly TaskCompletionSource<string> _tcs;
+
+        public TypedHandler(TaskCompletionSource<string> tcs, ILogger<TypedHandler> logger) : base(logger)
+        {
+            _tcs = tcs;
+            InitializeRoutes();
+        }
 
         protected override RouteBuilder ConfigureRoutes(RouteBuilder routeBuilder)
-            => routeBuilder.AddHandler<TypedMsg>(HandleTypedAsync);
+            => routeBuilder.AddHandler<TypedMsg>(TypedMessageContract, HandleTypedAsync);
 
         private ValueTask HandleTypedAsync(
             TypedMsg message,

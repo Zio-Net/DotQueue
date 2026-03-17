@@ -6,6 +6,11 @@ namespace DotQueue.Azure;
 
 public class AzureServiceBusQueueListener<T> : IQueueListener<T>, IAsyncDisposable
 {
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+    };
+
     private readonly ServiceBusProcessor _processor;
     private readonly IRetryPolicyProvider _retryPolicyProvider;
     private readonly QueueSettings _settings;
@@ -159,12 +164,7 @@ public class AzureServiceBusQueueListener<T> : IQueueListener<T>, IAsyncDisposab
             return (T)(object)new RawQueueMessage(json);
         }
 
-        var jsonOptions = new JsonSerializerOptions
-        {
-            PropertyNameCaseInsensitive = true,
-        };
-
-        return JsonSerializer.Deserialize<T>(json, jsonOptions);
+        return JsonSerializer.Deserialize<T>(json, JsonOptions);
     }
 }
 

@@ -14,11 +14,12 @@ public class ServiceCollectionExtensionsTests
         public Task HandleAsync(string message, IReadOnlyDictionary<string, string>? metadata, Func<Task> renewLock, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
-    private sealed class DummyTypedRoutedHandler(ILogger<DummyTypedRoutedHandler> logger)
-        : TypedRoutedQueueHandler(logger)
+    private sealed class DummyTypedRoutedHandler : TypedRoutedQueueHandler
     {
+        public DummyTypedRoutedHandler(ILogger<DummyTypedRoutedHandler> logger) : base(logger) => InitializeRoutes();
+
         protected override RouteBuilder ConfigureRoutes(RouteBuilder routeBuilder)
-            => routeBuilder.AddHandler<DummyTypedMessage>(HandleAsync);
+            => routeBuilder.AddHandler<DummyTypedMessage>("tests.dummy-typed.v1", HandleAsync);
 
         private static ValueTask HandleAsync(
             DummyTypedMessage message,
