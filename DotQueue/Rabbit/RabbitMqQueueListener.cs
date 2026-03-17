@@ -1,4 +1,4 @@
-﻿using DotQueue;
+using DotQueue;
 using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
@@ -50,7 +50,7 @@ public sealed class RabbitMqQueueListener<T> : IQueueListener<T>, IAsyncDisposab
             {
                 var bodyBytes = ea.Body.ToArray();
 
-                var msg = JsonSerializer.Deserialize<T>(bodyBytes, _json)
+                var msg = DeserializeMessage(bodyBytes)
                           ?? throw new NonRetryableException("Deserialize failed");
 
                 var meta = ea.BasicProperties?.Headers?
@@ -98,5 +98,16 @@ public sealed class RabbitMqQueueListener<T> : IQueueListener<T>, IAsyncDisposab
     {
         try { if (_ch is not null) await _ch.DisposeAsync().ConfigureAwait(false); } catch { }
         try { if (_conn is not null) await _conn.DisposeAsync().ConfigureAwait(false); } catch { }
+    }
+
+    private T? DeserializeMessage(byte[] bodyBytes)
+    {
+        if (typeof(T) == typeof(RawQueueMessage))
+        {
+            var json = Encoding.UTF8.GetString(bodyBytes);
+            return (T)(object)new RawQueueMessage(json);
+        }
+
+        return JsonSerializer.Deserialize<T>(bodyBytes, _json);
     }
 }

@@ -1,4 +1,4 @@
-﻿using Azure.Messaging.ServiceBus;
+using Azure.Messaging.ServiceBus;
 using Microsoft.Extensions.Logging;
 using System.Text.Json;
 
@@ -6,6 +6,11 @@ namespace DotQueue.Azure;
 
 public class AzureServiceBusSessionQueueListener<T> : IQueueListener<T>, IAsyncDisposable
 {
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+    };
+
     private readonly ServiceBusSessionProcessor _processor;
     private readonly IRetryPolicyProvider _retryPolicyProvider;
     private readonly QueueSettings _settings;
@@ -66,11 +71,7 @@ public class AzureServiceBusSessionQueueListener<T> : IQueueListener<T>, IAsyncD
             {
                 var json = args.Message.Body.ToString();
                 _logger.LogDebug("Raw message body: {Json}", json);
-                var jsonOptions = new JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true,
-                };
-                var msg = JsonSerializer.Deserialize<T>(json, jsonOptions);
+                var msg = DeserializeMessage(json);
                 if (msg == null)
                 {
                     _logger.LogWarning("Failed to deserialize message.");
@@ -152,5 +153,15 @@ public class AzureServiceBusSessionQueueListener<T> : IQueueListener<T>, IAsyncD
     {
         await _processor.DisposeAsync();
         GC.SuppressFinalize(this);
+    }
+
+    private static T? DeserializeMessage(string json)
+    {
+        if (typeof(T) == typeof(RawQueueMessage))
+        {
+            return (T)(object)new RawQueueMessage(json);
+        }
+
+        return JsonSerializer.Deserialize<T>(json, JsonOptions);
     }
 }

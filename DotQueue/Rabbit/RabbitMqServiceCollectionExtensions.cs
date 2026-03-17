@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
 
@@ -34,6 +34,38 @@ public static class RabbitMqServiceCollectionExtensions
             ));
 
         services.AddHostedService<QueueProcessor<T>>();
+        return services;
+    }
+
+    public static IServiceCollection AddTypedRoutedRabbitMQQueue<TRoutedHandler>(
+        this IServiceCollection services,
+        string amqpConnectionString,
+        string queueName,
+        Action<QueueSettings>? configure = null)
+        where TRoutedHandler : TypedRoutedQueueHandler
+    {
+        services.AddScoped<TRoutedHandler>();
+        services.AddScoped<IQueueHandler<RawQueueMessage>>(sp => sp.GetRequiredService<TRoutedHandler>());
+
+        var settings = new QueueSettings();
+        configure?.Invoke(settings);
+        services.AddSingleton(settings);
+        services.AddSingleton<IRetryPolicyProvider, RetryPolicyProvider>();
+
+        services.AddSingleton<IConnectionFactory>(_ => new ConnectionFactory
+        {
+            Uri = new Uri(amqpConnectionString),
+        });
+        services.AddSingleton<IQueueListener<RawQueueMessage>>(sp =>
+            new RabbitMqQueueListener<RawQueueMessage>(
+                sp.GetRequiredService<IConnectionFactory>(),
+                queueName,
+                sp.GetRequiredService<QueueSettings>(),
+                sp.GetRequiredService<IRetryPolicyProvider>(),
+                sp.GetRequiredService<ILogger<RabbitMqQueueListener<RawQueueMessage>>>()
+            ));
+
+        services.AddHostedService<QueueProcessor<RawQueueMessage>>();
         return services;
     }
 }
