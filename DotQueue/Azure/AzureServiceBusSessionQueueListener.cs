@@ -143,18 +143,20 @@ public class AzureServiceBusSessionQueueListener<T> : IQueueListener<T>, IAsyncD
                 outcome = "abandoned";
             }
 
+            // Shutdown cancels the handler; final settlement still uses the SDK's configured timeouts.
+            var settlementToken = CancellationToken.None;
             try
             {
                 switch (outcome)
                 {
                     case "completed":
-                        await args.CompleteMessageAsync(args.Message, cancellationToken);
+                        await args.CompleteMessageAsync(args.Message, settlementToken);
                         break;
                     case "dead-lettered":
-                        await args.DeadLetterMessageAsync(args.Message, cancellationToken: cancellationToken);
+                        await args.DeadLetterMessageAsync(args.Message, cancellationToken: settlementToken);
                         break;
                     default:
-                        await args.AbandonMessageAsync(args.Message, cancellationToken: cancellationToken);
+                        await args.AbandonMessageAsync(args.Message, cancellationToken: settlementToken);
                         break;
                 }
                 delivery?.Settle(outcome);

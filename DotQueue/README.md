@@ -61,6 +61,10 @@ attempting another settlement. Other settlement errors are reported as
 payloads are dead-lettered without invoking the handler, so they have no wait or
 processing sample. Cancellation from the SDK reaches the handler token; a
 successful abandonment remains `abandoned`, rather than claiming lock expiry.
+Final broker settlement uses a token independent of handler and listener shutdown
+cancellation, so shutdown does not cancel the attempt to release unfinished work.
+These operations still use the Service Bus client's configured retry limits and
+timeouts. Completed work and non-retryable failures can also settle during shutdown.
 
 ## Typed routed handlers (agent-style)
 

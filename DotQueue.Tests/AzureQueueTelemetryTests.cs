@@ -283,6 +283,38 @@ public class AzureQueueTelemetryTests
         Assert.Equal(ActivityStatusCode.Error, Assert.Single(capture.Spans).Status);
     }
 
+    [Theory]
+    [InlineData(false, "abandoned")]
+    [InlineData(true, "abandoned")]
+    [InlineData(false, "completed")]
+    [InlineData(true, "completed")]
+    [InlineData(false, "dead-lettered")]
+    [InlineData(true, "dead-lettered")]
+    public async Task ListenerShutdownDoesNotCancelFinalBrokerSettlement(bool session, string outcome)
+    {
+        using var capture = new TelemetryCapture();
+        using var shutdown = new CancellationTokenSource();
+        await using var pump = new TestPump(session, CreateMessage());
+        var handlerCancelled = false;
+        await pump.StartAsync((_, _, _, token) =>
+        {
+            shutdown.Cancel();
+            handlerCancelled = token.IsCancellationRequested;
+            if (outcome == "abandoned") token.ThrowIfCancellationRequested();
+            if (outcome == "dead-lettered") throw new NonRetryableException("invalid work");
+            return Task.CompletedTask;
+        }, shutdown.Token);
+        await pump.DeliverAsync();
+
+        Assert.True(handlerCancelled);
+        Assert.Equal(outcome == "abandoned" ? 1 : 0, pump.Abandoned);
+        Assert.Equal(outcome == "completed" ? 1 : 0, pump.Completed);
+        Assert.Equal(outcome == "dead-lettered" ? 1 : 0, pump.DeadLettered);
+        Assert.Equal(outcome, Assert.Single(capture.For("dotqueue.message.settled")).Tags["outcome"]);
+        capture.Meter.RecordObservableInstruments();
+        Assert.Equal(0, Assert.Single(capture.For("dotqueue.handler.active")).Value);
+    }
+
     [Fact]
     public async Task CapacityAggregatesListenersForOneQueueAndFailedStartLeavesNoCapacity()
     {
@@ -548,14 +580,27 @@ public class AzureQueueTelemetryTests
 
         private void ConfigureReceiver<TReceiver>(Mock<TReceiver> receiver) where TReceiver : ServiceBusReceiver
         {
-            receiver.Setup(x => x.CompleteMessageAsync(_message, It.IsAny<CancellationToken>())).Returns(async () =>
+            receiver.Setup(x => x.CompleteMessageAsync(_message, It.IsAny<CancellationToken>())).Returns(async (ServiceBusReceivedMessage _, CancellationToken token) =>
             {
+                token.ThrowIfCancellationRequested();
                 if (CompletionFailure is not null) throw CompletionFailure;
-                if (CompletionDelayMs > 0) await Task.Delay(CompletionDelayMs);
+                if (CompletionDelayMs > 0) await Task.Delay(CompletionDelayMs, token);
                 Completed++;
             });
-            receiver.Setup(x => x.AbandonMessageAsync(_message, It.IsAny<IDictionary<string, object>>(), It.IsAny<CancellationToken>())).Callback(() => Abandoned++).Returns(Task.CompletedTask);
-            receiver.Setup(x => x.DeadLetterMessageAsync(_message, It.IsAny<IDictionary<string, object>>(), It.IsAny<CancellationToken>())).Callback(() => DeadLettered++).Returns(Task.CompletedTask);
+            receiver.Setup(x => x.AbandonMessageAsync(_message, It.IsAny<IDictionary<string, object>>(), It.IsAny<CancellationToken>()))
+                .Returns((ServiceBusReceivedMessage _, IDictionary<string, object> _, CancellationToken token) =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    Abandoned++;
+                    return Task.CompletedTask;
+                });
+            receiver.Setup(x => x.DeadLetterMessageAsync(_message, It.IsAny<IDictionary<string, object>>(), It.IsAny<CancellationToken>()))
+                .Returns((ServiceBusReceivedMessage _, IDictionary<string, object> _, CancellationToken token) =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    DeadLettered++;
+                    return Task.CompletedTask;
+                });
             receiver.Setup(x => x.RenewMessageLockAsync(_message, It.IsAny<CancellationToken>())).Returns(RenewAsync);
         }
 
@@ -566,8 +611,9 @@ public class AzureQueueTelemetryTests
             return Task.CompletedTask;
         }
 
-        public Task StartAsync(Func<string, IReadOnlyDictionary<string, string>?, Func<Task>, CancellationToken, Task> handler)
-            => _listener.StartAsync(handler, CancellationToken.None);
+        public Task StartAsync(Func<string, IReadOnlyDictionary<string, string>?, Func<Task>, CancellationToken, Task> handler,
+            CancellationToken listenerCancellation = default)
+            => _listener.StartAsync(handler, listenerCancellation);
         public Task DeliverAsync() => _isSession
             ? _session.DeliverAsync(new ProcessSessionMessageEventArgs(_message, _sessionReceiver.Object, "processor", _processorCancellation))
             : _plain.DeliverAsync(new ProcessMessageEventArgs(_message, _receiver.Object, "processor", _processorCancellation));
