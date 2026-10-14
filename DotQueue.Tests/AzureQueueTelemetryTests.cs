@@ -339,6 +339,111 @@ public class AzureQueueTelemetryTests
         Assert.Equal(0, Assert.Single(metrics.For("dotqueue.handler.active")).Value);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OverlappingDeliveriesKeepTheirOwnTraceAcrossAwait(bool session)
+    {
+        using var capture = new TelemetryCapture();
+        using var ambient = new Activity("caller").Start();
+        var traceIds = new[] { "0123456789abcdef0123456789abcdef", "fedcba9876543210fedcba9876543210" };
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var first = new TestPump(session, CreateMessage(properties: new Dictionary<string, object>
+        {
+            ["traceparent"] = $"00-{traceIds[0]}-0123456789abcdef-01",
+        }));
+        await using var second = new TestPump(session, CreateMessage(properties: new Dictionary<string, object>
+        {
+            ["traceparent"] = $"00-{traceIds[1]}-fedcba9876543210-01",
+        }));
+
+        async Task HandleAsync(int index, TaskCompletionSource entered)
+        {
+            var consumer = Activity.Current;
+            Assert.NotNull(consumer);
+            Assert.Equal(traceIds[index], consumer.TraceId.ToHexString());
+            entered.SetResult();
+            await release.Task;
+            await Task.Yield();
+            Assert.Same(consumer, Activity.Current);
+            using var child = new Activity("handler-work").Start();
+            Assert.Equal(consumer.TraceId, child.TraceId);
+            Assert.Equal(consumer.SpanId, child.ParentSpanId);
+            await Task.Yield();
+            Assert.Same(child, Activity.Current);
+        }
+
+        await first.StartAsync((_, _, _, _) => HandleAsync(0, firstEntered));
+        await second.StartAsync((_, _, _, _) => HandleAsync(1, secondEntered));
+        var deliveries = Task.WhenAll(first.DeliverAsync(), second.DeliverAsync());
+        try
+        {
+            await Task.WhenAll(firstEntered.Task, secondEntered.Task).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Same(ambient, Activity.Current);
+            capture.Meter.RecordObservableInstruments();
+            Assert.Equal(2, Assert.Single(capture.For("dotqueue.handler.active")).Value);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await deliveries;
+        }
+        Assert.Same(ambient, Activity.Current);
+        Assert.Equal(2, capture.Spans.Count);
+        Assert.Equal(traceIds.OrderBy(x => x), capture.Spans.Select(x => x.TraceId.ToHexString()).OrderBy(x => x));
+        Assert.Equal(1, first.Completed);
+        Assert.Equal(1, second.Completed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProcessingDurationIncludesConfiguredDelayButExcludesRetryBackoffAndSettlement(bool session)
+    {
+        using var capture = new TelemetryCapture();
+        await using var pump = new TestPump(session, CreateMessage(), processingDelayMs: 50, retryDelaySeconds: 1)
+        {
+            CompletionDelayMs = 250,
+        };
+        var attempts = 0;
+        await pump.StartAsync((_, _, _, _) =>
+        {
+            if (++attempts == 1) throw new RetryableException("temporary");
+            return Task.CompletedTask;
+        });
+        var started = Stopwatch.GetTimestamp();
+        await pump.DeliverAsync();
+        var elapsed = Stopwatch.GetElapsedTime(started).TotalSeconds;
+        var duration = Assert.Single(capture.For("messaging.process.duration"));
+        Assert.True(duration.Value >= 0.04, $"Configured processing delay missing: {duration.Value}s");
+        Assert.True(elapsed - duration.Value >= 1.1, $"Backoff or settlement included: wall={elapsed}s, handler={duration.Value}s");
+        Assert.Equal(2, attempts);
+        Assert.Equal(1, pump.Completed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SampledOutConsumerStillProcessesMessageAndExportsMetrics(bool session)
+    {
+        using var capture = new TelemetryCapture(sampling: ActivitySamplingResult.None);
+        using var ambient = new Activity("caller").Start();
+        await using var pump = new TestPump(session, CreateMessage());
+        await pump.StartAsync((_, _, _, _) =>
+        {
+            Assert.Same(ambient, Activity.Current);
+            return Task.CompletedTask;
+        });
+        await pump.DeliverAsync();
+        Assert.Empty(capture.Spans);
+        Assert.Single(capture.For("dotqueue.message.wait"));
+        Assert.Equal("completed", Assert.Single(capture.For("dotqueue.message.settled")).Tags["outcome"]);
+        Assert.Equal(1, pump.Completed);
+        Assert.Same(ambient, Activity.Current);
+    }
+
     private static ServiceBusReceivedMessage CreateMessage(string body = "\"payload\"", IDictionary<string, object>? properties = null)
         => ServiceBusModelFactory.ServiceBusReceivedMessage(
             body: BinaryData.FromString(body),
@@ -357,12 +462,12 @@ public class AzureQueueTelemetryTests
         public MeterListener Meter { get; } = new();
         private readonly ActivityListener _traces;
 
-        public TelemetryCapture(bool metrics = true, bool traces = true)
+        public TelemetryCapture(bool metrics = true, bool traces = true, ActivitySamplingResult sampling = ActivitySamplingResult.AllDataAndRecorded)
         {
             _traces = new ActivityListener
             {
                 ShouldListenTo = source => traces && source.Name == "DotQueue",
-                Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+                Sample = (ref ActivityCreationOptions<ActivityContext> _) => sampling,
                 ActivityStopped = activity => Spans.Enqueue(activity),
             };
             ActivitySource.AddActivityListener(_traces);
@@ -417,10 +522,12 @@ public class AzureQueueTelemetryTests
         public int DeadLettered { get; private set; }
         public int Renewed { get; private set; }
         public Exception? CompletionFailure { get; set; }
+        public int CompletionDelayMs { get; set; }
         public Exception? RenewalFailure { get; set; }
         public Exception? StartFailure { set => _plain.StartFailure = value; }
 
-        public TestPump(bool session, ServiceBusReceivedMessage message, CancellationToken processorCancellation = default)
+        public TestPump(bool session, ServiceBusReceivedMessage message, CancellationToken processorCancellation = default,
+            int processingDelayMs = 0, int retryDelaySeconds = 0)
         {
             _isSession = session;
             _message = message;
@@ -428,7 +535,8 @@ public class AzureQueueTelemetryTests
             var client = new Mock<ServiceBusClient>();
             client.Setup(x => x.CreateProcessor("load-test", It.IsAny<ServiceBusProcessorOptions>())).Returns(_plain);
             client.Setup(x => x.CreateSessionProcessor("load-test", It.IsAny<ServiceBusSessionProcessorOptions>())).Returns(_session);
-            var settings = new QueueSettings { MaxConcurrentCalls = 3, MaxRetryAttempts = 2, RetryDelaySeconds = 0 };
+            var settings = new QueueSettings { MaxConcurrentCalls = 3, MaxRetryAttempts = 2,
+                RetryDelaySeconds = retryDelaySeconds, ProcessingDelayMs = processingDelayMs };
             _listener = session
                 ? new AzureServiceBusSessionQueueListener<string>(client.Object, "load-test", settings, new RetryPolicyProvider(), NullLogger<AzureServiceBusSessionQueueListener<string>>.Instance)
                 : new AzureServiceBusQueueListener<string>(client.Object, "load-test", settings, new RetryPolicyProvider(), NullLogger<AzureServiceBusQueueListener<string>>.Instance);
@@ -440,11 +548,11 @@ public class AzureQueueTelemetryTests
 
         private void ConfigureReceiver<TReceiver>(Mock<TReceiver> receiver) where TReceiver : ServiceBusReceiver
         {
-            receiver.Setup(x => x.CompleteMessageAsync(_message, It.IsAny<CancellationToken>())).Returns(() =>
+            receiver.Setup(x => x.CompleteMessageAsync(_message, It.IsAny<CancellationToken>())).Returns(async () =>
             {
-                if (CompletionFailure is not null) return Task.FromException(CompletionFailure);
+                if (CompletionFailure is not null) throw CompletionFailure;
+                if (CompletionDelayMs > 0) await Task.Delay(CompletionDelayMs);
                 Completed++;
-                return Task.CompletedTask;
             });
             receiver.Setup(x => x.AbandonMessageAsync(_message, It.IsAny<IDictionary<string, object>>(), It.IsAny<CancellationToken>())).Callback(() => Abandoned++).Returns(Task.CompletedTask);
             receiver.Setup(x => x.DeadLetterMessageAsync(_message, It.IsAny<IDictionary<string, object>>(), It.IsAny<CancellationToken>())).Callback(() => DeadLettered++).Returns(Task.CompletedTask);
