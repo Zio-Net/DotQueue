@@ -15,6 +15,7 @@ public class AzureServiceBusQueueListener<T> : IQueueListener<T>, IAsyncDisposab
     private readonly IRetryPolicyProvider _retryPolicyProvider;
     private readonly QueueSettings _settings;
     private readonly ILogger<AzureServiceBusQueueListener<T>> _logger;
+    private readonly AzureQueueTelemetry _telemetry;
 
     public AzureServiceBusQueueListener(
         ServiceBusClient client,
@@ -33,6 +34,7 @@ public class AzureServiceBusQueueListener<T> : IQueueListener<T>, IAsyncDisposab
             PrefetchCount = settings.PrefetchCount,
             AutoCompleteMessages = false
         });
+        _telemetry = new AzureQueueTelemetry(queueName, settings.MaxConcurrentCalls);
     }
 
     public async Task StartAsync(Func<T, IReadOnlyDictionary<string, string>?, Func<Task>, CancellationToken, Task> handler, CancellationToken cancellationToken)
@@ -41,7 +43,10 @@ public class AzureServiceBusQueueListener<T> : IQueueListener<T>, IAsyncDisposab
 
         _processor.ProcessMessageAsync += async args =>
         {
-            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            using var deliveryScope = _telemetry.StartDelivery(args.Message);
+            var delivery = deliveryScope.Telemetry;
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, args.CancellationToken);
+            var outcome = "completed";
 
             void ArmCancelAfterFromLockedUntil()
             {
@@ -62,6 +67,7 @@ public class AzureServiceBusQueueListener<T> : IQueueListener<T>, IAsyncDisposab
             var renewLock = async () =>
             {
                 await args.RenewMessageLockAsync(args.Message, linkedCts.Token);
+                delivery?.LockRenewed();
                 _logger.LogDebug("Lock renewed for message {MessageId}", args.Message.MessageId);
                 _logger.LogDebug("Lock till: {Time}", args.Message.LockedUntil);
 
@@ -77,50 +83,93 @@ public class AzureServiceBusQueueListener<T> : IQueueListener<T>, IAsyncDisposab
                 if (msg == null)
                 {
                     _logger.LogWarning("Failed to deserialize message.");
-                    await args.DeadLetterMessageAsync(args.Message, cancellationToken: cancellationToken);
-                    return;
+                    outcome = "dead-lettered";
                 }
-
-                // Extract application properties as metadata
-                var metadata = args.Message.ApplicationProperties
-                    .ToDictionary(kvp => kvp.Key, kvp => kvp.Value?.ToString() ?? string.Empty);
-
-                await retryPolicy.ExecuteAsync(async () =>
+                else
                 {
-                    await handler(msg, metadata, renewLock, linkedCts.Token);
-
-                    if (_settings.ProcessingDelayMs > 0)
+                    var metadata = args.Message.ApplicationProperties
+                        .ToDictionary(kvp => kvp.Key, kvp => kvp.Value?.ToString() ?? string.Empty);
+                    await retryPolicy.ExecuteAsync(async () =>
                     {
-                        await Task.Delay(_settings.ProcessingDelayMs, linkedCts.Token);
-                    }
-                });
-
-                await args.CompleteMessageAsync(args.Message, cancellationToken);
+                        delivery?.HandlerStarted();
+                        try
+                        {
+                            await handler(msg, metadata, renewLock, linkedCts.Token);
+                            if (_settings.ProcessingDelayMs > 0)
+                                await Task.Delay(_settings.ProcessingDelayMs, linkedCts.Token);
+                        }
+                        finally
+                        {
+                            delivery?.HandlerStopped();
+                        }
+                    });
+                }
             }
             catch (RetryableException rex)
             {
                 _logger.LogWarning(rex, "Retryable error. Abandoning message.");
-                await args.AbandonMessageAsync(args.Message, cancellationToken: cancellationToken);
+                delivery?.Fail(rex);
+                outcome = "abandoned";
             }
             catch (NonRetryableException nex)
             {
                 _logger.LogWarning(nex, "Non-retryable error. Dead-lettering message.");
-                await args.DeadLetterMessageAsync(args.Message, cancellationToken: cancellationToken);
+                delivery?.Fail(nex);
+                outcome = "dead-lettered";
             }
-            catch (OperationCanceledException) when (linkedCts.IsCancellationRequested)
+            catch (ServiceBusException ex) when (ex.Reason is ServiceBusFailureReason.MessageLockLost or ServiceBusFailureReason.SessionLockLost)
             {
-                _logger.LogWarning("Handler exceeded lock duration. Abandoning message.");
-                await args.AbandonMessageAsync(args.Message, cancellationToken: cancellationToken);
+                _logger.LogWarning(ex, "Message lock lost during processing.");
+                delivery?.Fail(ex);
+                delivery?.Settle("lock-expired");
+                return;
+            }
+            catch (OperationCanceledException ex) when (linkedCts.IsCancellationRequested)
+            {
+                _logger.LogWarning(ex, "Handler cancelled. Abandoning message.");
+                delivery?.Fail(ex);
+                outcome = "abandoned";
             }
             catch(JsonException jex)
             {
                 _logger.LogWarning(jex, "Error while deserializing message.");
-                await args.DeadLetterMessageAsync(args.Message, cancellationToken: cancellationToken);
+                delivery?.Fail(jex);
+                outcome = "dead-lettered";
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Unhandled error. Treating as retryable.");
-                await args.AbandonMessageAsync(args.Message, cancellationToken: cancellationToken);
+                delivery?.Fail(ex);
+                outcome = "abandoned";
+            }
+
+            try
+            {
+                switch (outcome)
+                {
+                    case "completed":
+                        await args.CompleteMessageAsync(args.Message, cancellationToken);
+                        break;
+                    case "dead-lettered":
+                        await args.DeadLetterMessageAsync(args.Message, cancellationToken: cancellationToken);
+                        break;
+                    default:
+                        await args.AbandonMessageAsync(args.Message, cancellationToken: cancellationToken);
+                        break;
+                }
+                delivery?.Settle(outcome);
+            }
+            catch (ServiceBusException ex) when (ex.Reason is ServiceBusFailureReason.MessageLockLost or ServiceBusFailureReason.SessionLockLost)
+            {
+                _logger.LogWarning(ex, "Message lock lost during settlement.");
+                delivery?.Fail(ex);
+                delivery?.Settle("lock-expired");
+            }
+            catch (Exception ex)
+            {
+                delivery?.Fail(ex);
+                delivery?.Settle("settlement-failed");
+                throw;
             }
         };
 
@@ -148,13 +197,29 @@ public class AzureServiceBusQueueListener<T> : IQueueListener<T>, IAsyncDisposab
 
             return Task.CompletedTask;
         };
-        await _processor.StartProcessingAsync(cancellationToken);
+        _telemetry.Start();
+        try
+        {
+            await _processor.StartProcessingAsync(cancellationToken);
+        }
+        catch
+        {
+            _telemetry.Dispose();
+            throw;
+        }
     }
 
     public async ValueTask DisposeAsync()
     {
-        await _processor.DisposeAsync();
-        GC.SuppressFinalize(this);
+        try
+        {
+            await _processor.DisposeAsync();
+        }
+        finally
+        {
+            _telemetry.Dispose();
+            GC.SuppressFinalize(this);
+        }
     }
 
     private static T? DeserializeMessage(string json)
