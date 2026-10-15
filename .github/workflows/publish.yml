@@ -102,12 +102,3 @@ jobs:
             --api-key "$NUGET_API_KEY" \
             --source https://api.nuget.org/v3/index.json
 
-          if ls ./artifacts/*.snupkg 1> /dev/null 2>&1; then
-            dotnet nuget push "./artifacts/*.snupkg" \
-              --skip-duplicate \
-              --api-key "$NUGET_API_KEY" \
-              --source https://api.nuget.org/v3/index.json
-          else
-            echo "No symbol packages (.snupkg) found to push."
-          fi
-
