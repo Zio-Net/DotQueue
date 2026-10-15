@@ -5,17 +5,19 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
-    <PackageId>DotQueue</PackageId>
-    <Version>1.3.0</Version>
+    <PackageId>Zionet.DotQueue</PackageId>
+    <Version>1.3.1</Version>
     <Authors>Alexander Kulyabin</Authors>
     <Company>Zionet</Company>
     <Description>Generic queue listener</Description>
     <PackageTags>DotQueue Listener</PackageTags>
     <RepositoryUrl>https://github.com/Zio-Net/DotQueue</RepositoryUrl>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
   <ItemGroup>
+    <None Update="README.md" Pack="true" PackagePath="\" />
     <PackageReference Include="Azure.Messaging.ServiceBus" Version="7.20.1" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="9.0.8" />
     <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.8" />
