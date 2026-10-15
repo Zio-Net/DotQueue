@@ -14,6 +14,10 @@ jobs:
   pack-and-push:
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: read
+      id-token: write
+
     env:
       LIB_PROJ: DotQueue/DotQueue.csproj
       TEST_PROJ: DotQueue.Tests/DotQueue.Tests.csproj
@@ -75,19 +79,35 @@ jobs:
             -o ./artifacts \
             --no-build
 
+      - name: NuGet login (OIDC)
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
       - name: Push to nuget.org
         env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
         shell: bash
         run: |
           set -euo pipefail
+
           if [ -z "${NUGET_API_KEY:-}" ]; then
-            echo "NUGET_API_KEY secret is not set." >&2
+            echo "NuGet API key was not generated." >&2
             exit 1
           fi
-          dotnet nuget push "./artifacts/*.nupkg"  --skip-duplicate --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
+
+          dotnet nuget push "./artifacts/*.nupkg" \
+            --skip-duplicate \
+            --api-key "$NUGET_API_KEY" \
+            --source https://api.nuget.org/v3/index.json
+
           if ls ./artifacts/*.snupkg 1> /dev/null 2>&1; then
-            dotnet nuget push "./artifacts/*.snupkg" --skip-duplicate --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
+            dotnet nuget push "./artifacts/*.snupkg" \
+              --skip-duplicate \
+              --api-key "$NUGET_API_KEY" \
+              --source https://api.nuget.org/v3/index.json
           else
             echo "No symbol packages (.snupkg) found to push."
           fi
+
